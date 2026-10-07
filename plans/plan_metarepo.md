@@ -45,7 +45,7 @@ Each feature gets its own clone of the meta repo, with ABINIT and abipy checked 
 - Implement **phase by phase** (see [Implementation phases](#7-implementation-phases)); stop after each phase for review.
 - **Verify every assumption** in [Things to verify](#8-things-to-verify-and-open-decisions) against the real repos
   and the installed Claude Code version before relying on it. Do not invent paths, flags or file names.
-- Prefer **small, boring tooling**: one Python CLI, standard library plus PyYAML.
+- Prefer **small, boring tooling**: one Python CLI, standard library plus PyYAML, Python 3.11 or newer.
 - **Keep this file updated:** tick off tasks and record decisions as they are made.
 
 ---
@@ -266,23 +266,23 @@ outputs can be tied to an exact ABINIT/abipy pair.
 
 ## 5. The `abimeta` CLI
 
-`tools/abimeta.py` is a single Python file (stdlib + PyYAML) with subcommands. Every command is **idempotent** and
+`tools/abimeta.py` is a single Python file (Python 3.11+, stdlib + PyYAML) with subcommands. Every command is **idempotent** and
 **prints what it does**. It never pushes, deletes branches or force-anything without an explicit flag.
 
 ### Commands
 
 | Command | What it does |
 |---|---|
-| `abimeta new <feature> [--repos abinit,abipy] [--branch NAME] [--base REF] [--fork REPO=USER]` | Clone meta into `../meta_<feature>`, create meta branch, clone each repo and create its feature branch, write `feature.yaml`, create venv, install abipy editable, link skills, install plugins, run `doctor` |
+| `abimeta new <feature> [--repos abinit,abipy] [--branch [REPO=]NAME] [--base [REPO=]REF] [--fork REPO=USER] [--no-fork REPO] [-d TEXT]` | Clone meta into `<workspace_root>/meta_<feature>`, create meta branch, clone each repo and create its feature branch, write and commit `feature.yaml`, run `doctor`. If the meta branch already exists on the remote, **resume** it: use its `feature.yaml` and check out the existing branches. Later phases add: create venv, install abipy editable, install plugins |
 | `abimeta status` | Branch, ahead/behind vs base, dirty files, for meta and each repo |
 | `abimeta sync [--rebase]` | Fetch all remotes; pull meta `main` into the feature; optionally rebase repo branches on their base |
 | `abimeta exec -- <cmd>` | Run a command in every repo clone (e.g. `git log -1`) |
-| `abimeta freeze` | Record each repo's `HEAD` as `pinned_commit` in `feature.yaml` |
+| `abimeta freeze [--allow-dirty]` | Record each repo's `HEAD` as `pinned_commit` (+ `pinned_at`) in `feature.yaml`, overwriting the previous pin, and commit `feature.yaml`. Refuses with uncommitted changes unless `--allow-dirty` |
 | `abimeta add-repo <name>` / `remove-repo <name>` | Add or drop a repo in an existing feature |
 | `abimeta skills link` | Create/refresh symlinks to repo-provided skills |
 | `abimeta skills sync` | Copy pinned third-party skills from `skills.lock.yaml`; show diff on version bumps |
-| `abimeta doctor` | Check imports resolve, symlinks valid, venv ok, abipy importable from this workspace, hooks executable |
-| `abimeta remove <feature> [--delete-branches]` | Delete the workspace directory after checking nothing is uncommitted or unpushed |
+| `abimeta doctor` | Phase 2: config present, `feature.yaml` valid, branches and remotes match it, bases exist, repos ignored by meta, no gitlinks, `CLAUDE.md` imports resolve, branch clashes. Later: venv ok, abipy importable from this workspace, hooks executable |
+| `abimeta remove <feature> [--force]` | Delete the workspace directory after checking that no repo, meta included, has uncommitted changes, untracked files, unpushed commits or stashes. (`--delete-branches` dropped: deleting remote branches is left to the user.) |
 
 ### Behaviour rules
 
@@ -291,7 +291,8 @@ outputs can be tied to an exact ABINIT/abipy pair.
 - **Safe remove:** `remove` refuses if any repo has uncommitted or unpushed work, unless `--force`.
 - **No hard-coded paths:** all paths come from `repos.yaml`, `feature.yaml` and the personal config
   `~/.config/abinit_metarepo/config.yaml` (see [Forges and identities](#forges-and-identities)).
-- **Machine-readable output:** exit codes `0` ok, `1` user error, `2` git error; `--json` output for `status` and
+- **Machine-readable output:** exit codes `0` ok, `1` user error, `2` git error, `3` doctor found errors (warnings
+  alone exit `0`); `--json` output for `status` and
   `doctor` so Claude Code can parse them.
 
 ---
@@ -349,11 +350,14 @@ skills after reading a file in `abipy/`.
 
 ### Phase 2 — `abimeta` core
 
-- [ ] `new`, `status`, `freeze`, `remove`, `doctor`, using full clones.
-- [ ] `feature.yaml` written and committed on the meta feature branch.
+- [x] `new`, `status`, `freeze`, `remove`, `doctor`, using full clones (`tools/abimeta.py`).
+- [x] `feature.yaml` written and committed on the meta feature branch.
+- [x] `tools/bootstrap.sh`: tooling venv and `abimeta` wrapper; writes a config template on first run.
+- [x] pytest suite with local bare repos as remotes (`tests/`), CI on Python 3.11 and 3.14 (R14).
+- [ ] Acceptance against the real remotes (needs Phase 1–2 merged to meta `main`, which `new` clones).
 
-**Acceptance:** `abimeta new demo` then `abimeta remove demo` leaves nothing behind; `remove` refuses while work is
-unpushed; reusing a branch name already used by another workspace prints a warning.
+**Acceptance:** `abimeta new demo` then `abimeta remove demo --force` leaves nothing behind; `remove` refuses while
+work is unpushed, including the meta branch that holds `feature.yaml` (R20); reusing a branch name already used by another workspace prints a warning.
 
 ### Phase 3 — Environments
 
@@ -449,6 +453,8 @@ resolve before or during the phase noted. Record the decision next to the item a
         `feature.yaml`. See [Forges and identities](#forges-and-identities).
       - *Note:* for abipy the user may push directly to the official repo instead of a fork. Supporting
         `fork: null` (origin = official repo, no second remote) is a small addition for Phase 2.
+        *Done:* `--no-fork REPO` or `no_fork: [abipy]` in the personal config clones the official repo under its
+        `upstream_remote` name and records `fork: null`.
 - [x] **R2 — `AGENTS.md` loaded twice** *(Phase 1)*. `abinit/CLAUDE.md` already imports `@AGENTS.md`, so the root
       import `@abinit/AGENTS.md` duplicates it. Options: drop the root repo imports and rely on nested `CLAUDE.md`
       loading on demand, or keep them and accept the duplication.
@@ -473,9 +479,11 @@ resolve before or during the phase noted. Record the decision next to the item a
 
 ### Internal inconsistencies
 
-- [ ] **R6 — Which `abimeta` runs?** The Bootstrap decision says `abimeta` runs from the main clone, but each
+- [x] **R6 — Which `abimeta` runs?** The Bootstrap decision says `abimeta` runs from the main clone, but each
       feature clone also contains `tools/abimeta.py`. Define which copy `sync` and other commands use when versions
       differ.
+      - *Decision (7 Oct 2026):* the wrapper from `bootstrap.sh` always runs the main clone's copy. It acts on the
+        workspace that contains the current directory (or `--workspace`). The copies in feature clones are not run.
 - [ ] **R7 — Host-specific path in `feature.yaml`.** `abinit_config: config/hosts/<host>.ac9` ties a committed
       manifest to one host, contradicting "works the same on laptop and cluster". Resolve the host config at
       runtime and keep only `abinit_configure_extra` per feature.
@@ -483,12 +491,15 @@ resolve before or during the phase noted. Record the decision next to the item a
       `@abipy/AGENTS.md` import dangles and `doctor` warns permanently. Consider generating `CLAUDE.md` per feature
       branch from the repos actually present.
       - *Resolved by R2:* root `CLAUDE.md` no longer imports repo files, so it is the same for any set of repos.
-- [ ] **R9 — CLI spec gaps.** `--force` for `remove` is in the behaviour rules but not the command table; no exit
+- [x] **R9 — CLI spec gaps.** `--force` for `remove` is in the behaviour rules but not the command table; no exit
       code is defined for `doctor` check failures.
+      - *Decision (7 Oct 2026):* `--force` added to the table; `doctor` exits `3` on errors, `0` with warnings only.
 - [ ] **R10 — Skill names drift.** Phase 4 says "build-submit-check" and "ABINIT test writing"; section 4.2 says
       `meta-build-submit-check` and `meta-abinit-tests`. Align them (after R4).
-- [ ] **R11 — `freeze` semantics.** Specify whether `pinned_commit` is overwritten and whether `freeze` commits
+- [x] **R11 — `freeze` semantics.** Specify whether `pinned_commit` is overwritten and whether `freeze` commits
       `feature.yaml` (git history would then record every freeze).
+      - *Decision (7 Oct 2026):* `pinned_commit` and `pinned_at` are overwritten, and `freeze` commits only
+        `feature.yaml`, so each pin is recorded in the history. Comments in `feature.yaml` are lost on rewrite.
 
 ### Workflow and risk
 
@@ -497,8 +508,9 @@ resolve before or during the phase noted. Record the decision next to the item a
       edited only in the main clone.
 - [ ] **R13 — Bash hooks are easy to bypass.** Pipes, `bash -c`, `env`, aliases and `xargs` defeat token matching.
       Pair hooks with `permissions.deny` rules and make the must-pass / must-block table part of the pytest suite.
-- [ ] **R14 — Tests and CI come too late.** `new` and `remove` touch real directories; move pytest + CI for
+- [x] **R14 — Tests and CI come too late.** `new` and `remove` touch real directories; move pytest + CI for
       `abimeta` into Phase 2.
+      - *Done:* `tests/` and `.github/workflows/tests.yml`.
 - [ ] **R15 — Unverified Claude Code behaviour on the critical path.** Nested `.claude/skills/` discovery when
       started at the workspace root, and project-scope plugin install in a fresh clone, must be tested in Phase 1
       before building on them. ABINIT's `.claude/skills` is a symlink to `.agents/skills`: also check that nested
@@ -531,8 +543,10 @@ resolve before or during the phase noted. Record the decision next to the item a
 - [ ] **R20 — End of a feature's life** *(Phase 2)*. After `remove`, `feature.yaml` and the feature plan survive only
       on the remote meta branch, and only if it was pushed. `remove` should require the meta branch to be pushed.
       Optionally, archive the manifest and plan to `main:features/<name>/`.
+      - *Partly done:* `remove` refuses while the meta branch has unpushed commits. Archiving to `main` is still open.
 - [ ] **R21 — Record upstream review links** *(Phase 2)*. Add the ABINIT GitLab MR and abipy GitHub PR URLs to
       `feature.yaml`, and show them in `status`.
+      - *Partly done:* each repo entry has a `review:` field, shown by `status`; filled by hand for now.
 - [ ] **R22 — `base_commit` goes stale** *(Phase 5)*. `sync --rebase` must update `base_commit`, following the same
       commit-or-not rule as `freeze` (R11).
 - [ ] **R23 — `sync` merge conflicts on per-feature files** *(Phase 5)*. If `CLAUDE.md` is generated per feature
