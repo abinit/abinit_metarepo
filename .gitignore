@@ -1,0 +1,12 @@
+# Code repos and per-feature state: each feature workspace owns its own copies.
+/abinit/
+/abipy/
+/build/
+/.venv/
+
+# Personal, never committed.
+CLAUDE.local.md
+.claude/settings.local.json
+
+__pycache__/
+*.pyc

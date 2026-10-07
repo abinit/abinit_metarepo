@@ -1,0 +1,18 @@
+# Repos managed by abimeta. Shared: no usernames here.
+# {user} is resolved per host from ~/.config/abinit_metarepo/config.yaml (see plans/plan_metarepo.md,
+# "Forges and identities").
+
+abinit:
+  host: gitlab.uliege.be
+  upstream_remote: trunk
+  upstream: https://gitlab.uliege.be/abinit/developers/trunk/abinit.git
+  fork: git@gitlab.uliege.be:abinit/developers/{user}/abinit.git
+  default_base: trunk/develop
+
+abipy:
+  host: github.com
+  upstream_remote: upstream
+  upstream: https://github.com/abinit/abipy.git
+  fork: git@github.com:{user}/abipy.git
+  default_base: upstream/develop
+  python_install: editable
